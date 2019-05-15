@@ -1,18 +1,20 @@
 'use strict';
 
 const puppeteer = require('puppeteer');
+const css = require('css');
 const dreConfig = require(`${process.cwd()}/dreconfig.json`);
 
 const getUnusedCSSSelectors = ({ ranges, text }) => {
-  const unusedCSS = ranges.reduce(
+  const unusedCSSText = ranges.reduce(
     (css, range) => css.replace(css.slice(range.start, range.end), ''),
     text,
   );
 
-  console.log('ALL CSS:');
-  console.log(text);
-  console.log('\nUNUSED CSS:');
-  console.log(unusedCSS);
+  const ast = css.parse(unusedCSSText);
+
+  return ast.stylesheet.rules
+    .map(rule => rule.selectors)
+    .flat(Number.Infinity);
 }
 
 (async () => {
@@ -22,5 +24,7 @@ const getUnusedCSSSelectors = ({ ranges, text }) => {
   await page.coverage.startCSSCoverage();
   await page.goto(`${dreConfig.baseUrl}${dreConfig.paths[0]}`);
   const reports = await page.coverage.stopCSSCoverage();
-  getUnusedCSSSelectors(reports[3]);
+  getUnusedCSSSelectors(reports[4]);
+
+  await browser.close();
 })();

@@ -24,6 +24,7 @@
   },
   "homepage": "https://github.com/jamesseanwright/dre#readme",
   "dependencies": {
+    "css": "2.2.4",
     "puppeteer": "1.16.0"
   }
 }
