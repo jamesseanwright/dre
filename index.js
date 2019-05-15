@@ -8,37 +8,58 @@ const getSelectors = ({ stylesheet }) =>
   stylesheet.rules.flatMap(({ selectors }) => selectors);
 
 // TODO: combine separate iterations to aid perf
-const getUnusedSelectors = (ranges, text) => {
+const getUnusedSelectors = ({ url, ranges, text }) => {
   const allSelectors = getSelectors(css.parse(text));
 
   const usedSelectors = ranges
     .map(({ start, end }) => css.parse(text.slice(start, end)))
     .flatMap(getSelectors);
 
-  return allSelectors.filter(selector => !usedSelectors.includes(selector));
+  const unusedSelectors = allSelectors.filter(
+    selector => selector && !usedSelectors.includes(selector)
+  );
+
+  return {
+    url,
+    unusedSelectors,
+  };
 };
 
 // TODO: abstract into report builder and test!
 const buildReport = ({ url, ranges, text }) => `
   Unused selectors in ${url}:
   ${'-'.repeat(url.length)}
-  ${getUnusedSelectors(ranges, text).join('\n  *')}
+  ${getUnusedSelectors(ranges, text).join('\n  * ')}
 
   ----
-
 `;
 
-(async () => {
-  const browser = await puppeteer.launch();
+const getCoverageForUrl = async (browser, url) => {
   const page = await browser.newPage();
 
   await page.coverage.startCSSCoverage();
-  await page.goto(`${dreConfig.baseUrl}${dreConfig.paths[0]}`);
+  await page.goto(url);
 
-  const coverageResults = await page.coverage.stopCSSCoverage();
-  const reports = coverageResults.map(buildReport);
+  const results = await page.coverage.stopCSSCoverage();
 
-  console.log(reports.join('\n'));
+  return results.map(getUnusedSelectors);
+};
+
+(async () => {
+  const reports = new Map();
+  const browser = await puppeteer.launch();
+
+  const results = await Promise.all(
+    dreConfig.paths.map(path => getCoverageForUrl(browser, `${dreConfig.baseUrl}${path}`)),
+  );
+
+  console.log(results.length);
+  console.log('*******', JSON.stringify(results, null, 2));
+
+  // console.log(results);
+  // const reports = coverageResults.map(buildReport);
+
+  // console.log(reports.join('\n'));
 
   await browser.close();
 })();
