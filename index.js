@@ -45,21 +45,63 @@ const getCoverageForUrl = async (browser, url) => {
   return results.map(getUnusedSelectors);
 };
 
+const deduplicate = iterable =>
+  [...new Set(iterable)];
+
+const mergeResults = resultsByPath => {
+  const resources = new Map();
+
+  resultsByPath
+    .flat()
+    .forEach(({ url, unusedSelectors }) => {
+      if (!resources.has(url)) {
+        resources.set(url, unusedSelectors);
+      } else {
+        const existingSelectors = resources.get(url);
+
+        resources.set(
+          url,
+          deduplicate([...existingSelectors, ...unusedSelectors]),
+        );
+      }
+    });
+
+  return resources;
+};
+
+/* Object.fromEntries is not currently
+ * available in Node. TODO: refactor
+ * to use this once it's landed */
+const fromEntries = entries =>
+  [...entries].reduce(
+    (obj, [key, value]) => ({
+      ...obj,
+      [key]: value,
+    }),
+    {},
+  );
+
+// TODO: proper report formatting
+const printResults = results => {
+  const formattedResults = JSON.stringify(
+    fromEntries(results.entries()),
+    null,
+    4,
+  );
+
+  console.log(formattedResults);
+};
+
 (async () => {
-  const reports = new Map();
   const browser = await puppeteer.launch();
 
-  const results = await Promise.all(
+  const resultsByPath = await Promise.all(
     dreConfig.paths.map(path => getCoverageForUrl(browser, `${dreConfig.baseUrl}${path}`)),
   );
 
-  console.log(results.length);
-  console.log('*******', JSON.stringify(results, null, 2));
+  const mergedResults = mergeResults(resultsByPath);
 
-  // console.log(results);
-  // const reports = coverageResults.map(buildReport);
-
-  // console.log(reports.join('\n'));
+  printResults(mergedResults);
 
   await browser.close();
 })();
