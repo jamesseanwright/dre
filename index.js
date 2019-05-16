@@ -1,107 +1,77 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const puppeteer = require('puppeteer');
 const css = require('css');
-const dreConfig = require(`${process.cwd()}/dreconfig.json`);
+const dreConfig = require(`${process.cwd()}/dreconfig`);
 
-const getSelectors = ({ stylesheet }) =>
-  stylesheet.rules.flatMap(({ selectors }) => selectors);
+async function* executeFlow(page, { baseUrl, flow }) {
+  for (let { path, actions = () => Promise.resolve() } of flow) {
+    await page.goto(`${baseUrl}${path}`);
+    yield actions(page);
+  }
+}
 
-// TODO: combine separate iterations to aid perf
-const getUnusedSelectors = ({ url, ranges, text }) => {
-  const allSelectors = getSelectors(css.parse(text));
-
-  const usedSelectors = ranges
-    .map(({ start, end }) => css.parse(text.slice(start, end)))
-    .flatMap(getSelectors);
-
-  const unusedSelectors = allSelectors.filter(
-    selector => selector && !usedSelectors.includes(selector)
+const getTrimmedStylesheet = ({ url, ranges, text }) => {
+  const usedStyles = ranges.reduce(
+    (used, { start, end }) => used + text.substring(start, end),
+    '',
   );
+
+  const ast = css.parse(usedStyles);
 
   return {
     url,
-    unusedSelectors,
+    contents: css.stringify(ast, {
+      compress: true,
+    }),
   };
 };
 
-// TODO: abstract into report builder and test!
-const buildReport = ({ url, ranges, text }) => `
-  Unused selectors in ${url}:
-  ${'-'.repeat(url.length)}
-  ${getUnusedSelectors(ranges, text).join('\n  * ')}
-
-  ----
-`;
-
-const getCoverageForUrl = async (browser, url) => {
-  const page = await browser.newPage();
-
-  await page.coverage.startCSSCoverage();
-  await page.goto(url);
-
-  const results = await page.coverage.stopCSSCoverage();
-
-  return results.map(getUnusedSelectors);
+const createOutDir = outDir => {
+  if (!fs.existsSync(outDir)) {
+    fs.mkdirSync(outDir);
+  }
 };
 
-const deduplicate = iterable =>
-  [...new Set(iterable)];
+const writeStylesheet = (outDir, { url, contents }) => {
+  const [filename] = url.split('/').splice(-1);
 
-const mergeResults = resultsByPath => {
-  const resources = new Map();
+  /* For some reason, there is at times a result
+   * associated with no filename. TODO: investigate */
+  if (!filename) {
+    return;
+  }
 
-  resultsByPath
-    .flat()
-    .forEach(({ url, unusedSelectors }) => {
-      if (!resources.has(url)) {
-        resources.set(url, unusedSelectors);
-      } else {
-        const existingSelectors = resources.get(url);
-
-        resources.set(
-          url,
-          deduplicate([...existingSelectors, ...unusedSelectors]),
-        );
-      }
-    });
-
-  return resources;
-};
-
-/* Object.fromEntries is not currently
- * available in Node. TODO: refactor
- * to use this once it's landed */
-const fromEntries = entries =>
-  [...entries].reduce(
-    (obj, [key, value]) => ({
-      ...obj,
-      [key]: value,
-    }),
-    {},
+  fs.writeFileSync(
+    path.resolve(outDir, filename),
+    contents,
   );
-
-// TODO: proper report formatting
-const printResults = results => {
-  const formattedResults = JSON.stringify(
-    fromEntries(results.entries()),
-    null,
-    4,
-  );
-
-  console.log(formattedResults);
 };
 
 (async () => {
-  const browser = await puppeteer.launch();
+  const browser = await puppeteer.launch(dreConfig.puppeteerOptions);
+  const page = await browser.newPage();
 
-  const resultsByPath = await Promise.all(
-    dreConfig.paths.map(path => getCoverageForUrl(browser, `${dreConfig.baseUrl}${path}`)),
-  );
+  await page.coverage.startCSSCoverage({
+    resetOnNavigation: false,
+  });
 
-  const mergedResults = mergeResults(resultsByPath);
+  try {
+    for await (let _ of executeFlow(page, dreConfig)) {
+      // TODO: umm...
+    }
 
-  printResults(mergedResults);
+    const results = await page.coverage.stopCSSCoverage();
 
-  await browser.close();
+    createOutDir(dreConfig.outDir);
+
+    results.map(getTrimmedStylesheet)
+      .forEach(stylesheet => writeStylesheet(dreConfig.outDir, stylesheet));
+  } catch (e) {
+    console.error(e);
+  } finally {
+    await browser.close();
+  }
 })();
